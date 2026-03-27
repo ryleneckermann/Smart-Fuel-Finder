@@ -72,68 +72,42 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
 
 def geocode_address(address_text):
     try:
-        # Search restricted to South Australia to avoid finding places in other countries
         res = ors_client.pelias_search(text=f"{address_text}, South Australia")
         if res and 'features' in res and len(res['features']) > 0:
             coords = res['features'][0]['geometry']['coordinates']
-            return coords # returns [lon, lat]
+            return coords 
         return None
     except:
         return None
 
 stations_df = load_stations()
 
-# ==========================================================
-# MOBILE FRIENDLY TOP SECTION
-# ==========================================================
 st.title("SmartFuel Finder")
 
-with st.expander("Search & Vehicle Settings", expanded=True):
-    st.subheader("1. Where are you?")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        manual_address = st.text_input("Enter Suburb or Postcode (e.g., Glenelg)")
-    with col2:
-        st.write("Or use GPS:")
-        loc = streamlit_geolocation()
+# ==========================================================
+# TOP SEARCH BAR (Very minimal for mobile)
+# ==========================================================
+col1, col2 = st.columns([4, 1])
+with col1:
+    manual_address = st.text_input("Search", placeholder="Search Suburb (e.g., Glenelg)", label_visibility="collapsed")
+with col2:
+    loc = streamlit_geolocation()
 
-    # Handle Location Logic
-    if manual_address:
-        coords = geocode_address(manual_address)
-        if coords:
-            st.session_state.user_loc = coords
-            st.session_state.center = [coords[1], coords[0]]
-            st.session_state.zoom = 13
-        else:
-            st.warning("Could not find that location.")
-    elif loc and loc.get('latitude'):
-        st.session_state.user_loc = [loc['longitude'], loc['latitude']]
-        st.session_state.center = [loc['latitude'], loc['longitude']]
-
-    st.divider()
-    st.subheader("2. Your Car")
-    
-    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
-    if v_type == "Custom Number":
-        eff = st.number_input("Efficiency (L/100km)", value=8.5, step=0.1)
+if manual_address:
+    coords = geocode_address(manual_address)
+    if coords:
+        st.session_state.user_loc = coords
+        st.session_state.center = [coords[1], coords[0]]
+        st.session_state.zoom = 13
     else:
-        eff = VEHICLE_TYPES[v_type]
-        
-    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
-    return_trip = st.toggle("Include Return Trip in math", value=True)
-    
-    st.divider()
-    app_mode = st.toggle("Show Absolute Best Choice (Calculates all servos)", value=False)
-    
-    if st.button("Clear Map Selections", use_container_width=True):
-        st.session_state.selected_servos = []
-        st.rerun()
+        st.warning("Could not find that location.")
+elif loc and loc.get('latitude'):
+    st.session_state.user_loc = [loc['longitude'], loc['latitude']]
+    st.session_state.center = [loc['latitude'], loc['longitude']]
 
 # ==========================================================
-# MAP WITH COLOR CODING
+# FRONT AND CENTER MAP
 # ==========================================================
-# Calculate price brackets for colors
 if not stations_df.empty:
     min_p = stations_df['price'].min()
     max_p = stations_df['price'].max()
@@ -153,7 +127,6 @@ if st.session_state.user_loc:
 for _, row in stations_df.iterrows():
     is_sel = row['name'] in st.session_state.selected_servos
     
-    # Apply color logic
     if is_sel:
         bg_color = "black"
         text_color = "white"
@@ -175,7 +148,7 @@ for _, row in stations_df.iterrows():
         popup=row['name']
     ).add_to(m)
 
-st_data = st_folium(m, use_container_width=True, height=400, key="map", returned_objects=["last_object_clicked_popup", "center", "zoom"])
+st_data = st_folium(m, use_container_width=True, height=450, key="map", returned_objects=["last_object_clicked_popup", "center", "zoom"])
 
 if st_data:
     if st_data.get("center"):
@@ -192,11 +165,29 @@ if st_data and st_data.get('last_object_clicked_popup') and st_data['last_object
         st.rerun()
 
 # ==========================================================
+# VEHICLE SETTINGS & MATH (Tucked away neatly)
+# ==========================================================
+with st.expander("🚗 Vehicle Settings & Cost Calculator", expanded=False):
+    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
+    if v_type == "Custom Number":
+        eff = st.number_input("Efficiency (L/100km)", value=8.5, step=0.1)
+    else:
+        eff = VEHICLE_TYPES[v_type]
+        
+    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
+    return_trip = st.toggle("Include Return Trip in math", value=True)
+    
+    st.divider()
+    app_mode = st.toggle("🏆 Show Absolute Best Choice (Calculates all servos)", value=False)
+    
+    if st.button("Clear Map Selections", use_container_width=True):
+        st.session_state.selected_servos = []
+        st.rerun()
+
+# ==========================================================
 # RESULTS DISPLAY
 # ==========================================================
-if not st.session_state.user_loc:
-    st.info("Enter an address or use GPS above to start.")
-else:
+if st.session_state.user_loc:
     u_lon, u_lat = st.session_state.user_loc
     
     if app_mode:
