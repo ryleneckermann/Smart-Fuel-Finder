@@ -163,7 +163,7 @@ st.session_state.user_loc = [loc['longitude'], loc['latitude']]
 st.session_state.center = [loc['latitude'], loc['longitude']]
 st.success("📍 GPS Location locked!")
 
-Filter out servos that don't sell the selected fuel (price = 0.00)
+# Filter out servos that don't sell the selected fuel (price = 0.00)
 if not stations_df.empty:
 stations_df['current_price'] = stations_df[f'price_{fuel_choice}']
 stations_df = stations_df[stations_df['current_price'] > 0.0]
