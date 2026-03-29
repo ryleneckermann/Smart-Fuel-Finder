@@ -14,15 +14,15 @@ ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3O
 ors_client = client.Client(key=ORS_API_KEY)
 SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
 
-st.set_page_config(page_title="Smart Fuel Finder", layout="wide")
+st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
 
-# Session State
+# Session State for Mobile Persistence
 if 'center' not in st.session_state: st.session_state.center = [-34.9285, 138.6007]
 if 'zoom' not in st.session_state: st.session_state.zoom = 12
 if 'selected_servos' not in st.session_state: st.session_state.selected_servos = []
 if 'user_loc' not in st.session_state: st.session_state.user_loc = None
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=600)
 def fetch_live_sa_prices(token):
     headers = {"Authorization": f"FPDAPI SubscriberToken={token}", "Content-Type": "application/json"}
     try:
@@ -42,105 +42,107 @@ def fetch_live_sa_prices(token):
         prices_df = prices_df.dropna(subset=['FuelType'])
         
         pivot_prices = prices_df.pivot(index='SiteId', columns='FuelType', values='Price').reset_index()
-        final_df = pd.merge(sites_df, pivot_prices, on='SiteId', how='inner')
-        return final_df.fillna(0.00)
+        return pd.merge(sites_df, pivot_prices, on='SiteId', how='inner').fillna(0.00)
     except: return pd.DataFrame()
 
-# Load Data
 df = fetch_live_sa_prices(SA_FUEL_TOKEN)
 
+# ==========================================================
+# UI - MOBILE OPTIMIZED
+# ==========================================================
 st.title("⛽ Smart Fuel Finder")
 
-# 1. SETTINGS & FILTERS
-with st.sidebar:
-    st.header("Settings")
+# 1. TOP CONTROLS (Expanders save vertical space on mobile)
+with st.expander("📍 Set Location & Fuel", expanded=True):
     fuel_choice = st.selectbox("Fuel Type", ["U91", "U95", "U98", "Diesel"])
     fuel_col = f"price_{fuel_choice}"
     
-    st.divider()
-    st.subheader("Calculator Settings")
-    litres = st.slider("Fill amount (L)", 10, 100, 50)
-    eff = st.number_input("Car L/100km", value=8.5)
+    col_srch, col_gps = st.columns([4,1])
+    with col_srch:
+        addr = st.text_input("Search Suburb", placeholder="e.g. Marion")
+    with col_gps:
+        st.write("") # Alignment
+        loc = streamlit_geolocation()
 
-# 2. LOCATION SEARCH
-col_srch, col_gps = st.columns([4,1])
-with col_srch:
-    addr = st.text_input("Search Suburb", placeholder="e.g. Glenelg")
-with col_gps:
-    loc = streamlit_geolocation()
+    if addr:
+        try:
+            geo = ors_client.pelias_search(text=f"{addr}, SA")['features'][0]['geometry']['coordinates']
+            st.session_state.user_loc = [geo[0], geo[1]]
+            st.session_state.center = [geo[1], geo[0]]
+        except: pass
+    elif loc and loc.get('latitude'):
+        st.session_state.user_loc = [loc['longitude'], loc['latitude']]
+        st.session_state.center = [loc['latitude'], loc['longitude']]
 
-if addr:
-    try:
-        geo = ors_client.pelias_search(text=f"{addr}, SA")['features'][0]['geometry']['coordinates']
-        st.session_state.user_loc = [geo[0], geo[1]]
-        st.session_state.center = [geo[1], geo[0]]
-    except: pass
-elif loc and loc.get('latitude'):
-    st.session_state.user_loc = [loc['longitude'], loc['latitude']]
-    st.session_state.center = [loc['latitude'], loc['longitude']]
-
-# 3. DATA PROCESSING
+# 2. THE SMART "BEST VALUE" LIST
 if not df.empty and fuel_col in df.columns:
     active_df = df[df[fuel_col] > 0].copy()
     
-    # Calculate "Cheapness" colors
-    low, high = active_df[fuel_col].quantile([0.2, 0.8])
-    def get_color(p):
-        if p <= low: return "#28a745" # Green
-        if p >= high: return "#dc3545" # Red
-        return "#ffc107" # Yellow/Orange
+    # Color logic
+    prices = active_df[fuel_col].values
+    low_thresh = np.percentile(prices, 25)
+    high_thresh = np.percentile(prices, 75)
 
-    # 4. BEST VALUE TABLE (TOP 5)
-    # If we have location, sort by distance. Otherwise, sort by price.
-    st.subheader(f"🏆 Best {fuel_choice} Deals Nearby")
-    if st.session_state.user_loc:
-        u_lon, u_lat = st.session_state.user_loc
-        active_df['dist'] = np.sqrt((active_df['lon']-u_lon)**2 + (active_df['lat']-u_lat)**2) * 111
-        top_5 = active_df.sort_values(fuel_col).head(5)
-    else:
-        top_5 = active_df.sort_values(fuel_col).head(5)
+    def get_color(p):
+        if p <= low_thresh: return "#28a745" # Green
+        if p >= high_thresh: return "#dc3545" # Red
+        return "#ffc107" # Yellow
+
+    # Filter to nearby (15km) for the "Best Deals" list
+    u_lon, u_lat = st.session_state.center[1], st.session_state.center[0]
+    active_df['dist_km'] = np.sqrt((active_df['lon']-u_lon)**2 + (active_df['lat']-u_lat)**2) * 111
     
-    cols = st.columns(5)
-    for i, (idx, row) in enumerate(top_5.iterrows()):
-        with cols[i]:
-            st.metric(row['name'][:15], f"${row[fuel_col]:.2f}")
-            if st.button(f"Add #{i+1}", key=f"add_{i}"):
-                if row['name'] not in st.session_state.selected_servos:
-                    st.session_state.selected_servos.append(row['name'])
+    nearby_best = active_df[active_df['dist_km'] < 15].sort_values(fuel_col).head(5)
+
+    st.subheader(f"🏆 Best {fuel_choice} Deals Nearby")
+    if nearby_best.empty:
+        st.info("Move the map or search a suburb to find local deals.")
+    else:
+        for idx, row in nearby_best.iterrows():
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"**{row['name']}** \n${row[fuel_col]:.2f} ({row['dist_km']:.1f}km away)")
+            with c2:
+                if st.button("➕ Add", key=f"btn_{row['SiteId']}"):
+                    if row['name'] not in st.session_state.selected_servos:
+                        st.session_state.selected_servos.append(row['name'])
                     st.rerun()
 
-    # 5. THE MAP
+    # 3. THE MAP
     st.divider()
-    m = folium.Map(location=st.session_state.center, zoom_start=st.session_state.zoom)
+    m = folium.Map(location=st.session_state.center, zoom_start=st.session_state.zoom, control_scale=True)
     
-    # Only show stations in the current map area to keep it fast
-    for _, row in active_df.iterrows():
-        # Check if in "viewport" (rough estimate)
-        if abs(row['lat'] - st.session_state.center[0]) < 0.2 and abs(row['lon'] - st.session_state.center[1]) < 0.2:
-            color = get_color(row[fuel_col])
-            folium.Marker(
-                [row['lat'], row['lon']],
-                icon=folium.DivIcon(html=f"""<div style="background:{color}; color:white; padding:3px; border-radius:3px; font-weight:bold; border:1px solid black; width:45px; text-align:center;">${row[fuel_col]:.2f}</div>"""),
-                popup=f"<b>{row['name']}</b><br>Click 'Add' in the table above to compare."
-            ).add_to(m)
+    # Only render what's near the center to keep mobile snappy
+    visible_df = active_df[active_df['dist_km'] < 20]
+    
+    for _, row in visible_df.iterrows():
+        color = get_color(row[fuel_col])
+        folium.Marker(
+            [row['lat'], row['lon']],
+            icon=folium.DivIcon(html=f"""<div style="background:{color}; color:white; padding:2px; border-radius:3px; font-weight:bold; border:1px solid black; width:45px; text-align:center; font-size:12px;">${row[fuel_col]:.2f}</div>"""),
+            popup=row['name']
+        ).add_to(m)
 
-    st_map = st_folium(m, center=st.session_state.center, zoom=st.session_state.zoom, height=500, use_container_width=True)
+    st_map = st_folium(m, center=st.session_state.center, zoom=st.session_state.zoom, height=400, use_container_width=True)
     
-    # 6. CALCULATOR (HIDDEN UNTIL USED)
+    if st_map.get("center"):
+        st.session_state.center = [st_map["center"]["lat"], st_map["center"]["lng"]]
+        st.session_state.zoom = st_map["zoom"]
+
+    # 4. CALCULATOR (At the bottom)
     if st.session_state.selected_servos:
         st.divider()
-        st.subheader("⚖️ Fuel Comparison Calculator")
+        st.subheader("⚖️ Comparison")
         calc_df = active_df[active_df['name'].isin(st.session_state.selected_servos)]
         
+        with st.expander("Vehicle Settings"):
+            litres = st.slider("Fill amount (L)", 10, 100, 50)
+            eff = st.number_input("Car L/100km", value=8.5)
+
         for _, row in calc_df.iterrows():
-            with st.expander(f"Analysis for {row['name']}", expanded=True):
-                price = row[fuel_col]
-                total_fuel = price * litres
-                st.write(f"Pump Price: **${price:.2f}**")
-                st.write(f"Total for {litres}L: **${total_fuel:.2f}**")
+            cost = row[fuel_col] * litres
+            st.info(f"**{row['name']}**: Total ${cost:.2f}")
         
-        if st.button("Clear Selections"):
+        if st.button("Clear All", use_container_width=True):
             st.session_state.selected_servos = []
             st.rerun()
-else:
-    st.info("Searching for the best fuel prices in SA...")
