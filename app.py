@@ -12,7 +12,7 @@ from openrouteservice import client
 ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0='
 ors_client = client.Client(key=ORS_API_KEY)
 
-SA GOVT API SETUP
+# SA GOVT API SETUP
 SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
 
 st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
