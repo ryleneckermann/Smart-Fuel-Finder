@@ -55,58 +55,44 @@ def fetch_live_sa_prices(token):
     try:
         # 1. Fetch Fuel Types
         ft_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetCountryFuelTypes?countryId=21", headers=headers)
-        ft_data = ft_res.json()
+        ft_json = ft_res.json()
         
-        # DEBUG: If the response isn't a list, show us what it is
-        if not isinstance(ft_data, list):
-            st.warning(f"Unexpected Fuel Data Format: {ft_data}")
-            return pd.DataFrame()
-
+        # FIX: The API wraps the list in a "Fuels" key
+        ft_list = ft_json.get('Fuels', []) if isinstance(ft_json, dict) else ft_json
+        
         fuel_mapping = {}
-        for item in ft_data:
-            if isinstance(item, dict): # Ensure item is a dictionary before using .get()
-                name = item.get("Name", "").upper()
-                fid = item.get("FuelId")
-                if "91" in name and "E10" not in name: fuel_mapping[fid] = "price_U91"
-                elif "95" in name: fuel_mapping[fid] = "price_U95"
-                elif "98" in name: fuel_mapping[fid] = "price_U98"
-                elif "DIESEL" in name and "PREMIUM" not in name: fuel_mapping[fid] = "price_Diesel"
+        for item in ft_list:
+            fid = item.get("FuelId")
+            name = item.get("Name", "").upper()
+            if fid == 2: fuel_mapping[fid] = "price_U91"   # 'Unleaded'
+            elif fid == 5: fuel_mapping[fid] = "price_U95" # 'Premium Unleaded 95'
+            elif fid == 8: fuel_mapping[fid] = "price_U98" # 'Premium Unleaded 98'
+            elif fid == 3: fuel_mapping[fid] = "price_Diesel" # 'Diesel'
 
         # 2. Fetch Sites
         sites_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetFullSiteDetails?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
-        sites_data = sites_res.json()
+        sites_json = sites_res.json()
+        # API wraps sites in "S" [cite: 100, 206]
+        sites_list = sites_json.get('S', []) if isinstance(sites_json, dict) else sites_json
         
-        # The API returns sites in a dictionary under the key "S" [cite: 98, 100]
-        if isinstance(sites_data, dict) and "S" in sites_data:
-            sites_list = sites_data["S"]
-        else:
-            sites_list = sites_data if isinstance(sites_data, list) else []
-
         if not sites_list:
-            st.error("No site data found. Check token or API status.")
             return pd.DataFrame()
 
         sites_df = pd.DataFrame(sites_list)
-        # Standardize columns based on API: S=SiteID, N=Name, Lat/Lng for position [cite: 206]
         sites_df = sites_df.rename(columns={"S": "SiteId", "N": "name", "Lat": "lat", "Lng": "lon"})
         
         # 3. Fetch Prices
         prices_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Price/GetSitesPrices?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
-        prices_data = prices_res.json()
+        prices_list = prices_res.json() # Usually a direct list [cite: 221]
         
-        # Documentation says GetSitesPrices returns a list of prices [cite: 216, 221]
-        prices_list = prices_data if isinstance(prices_data, list) else []
-        if not prices_list:
-            st.error("No price data found.")
-            return pd.DataFrame()
+        if not isinstance(prices_list, list):
+            prices_list = prices_list.get('SitePrices', []) if isinstance(prices_list, dict) else []
 
         prices_df = pd.DataFrame(prices_list)
         
         # 4. Clean and Merge
-        # 9999 means out of stock [cite: 220]
-        prices_df = prices_df[prices_df['Price'] != 9999.0]
-        # Prices are in tenths of a cent (1356.0 = $1.356) [cite: 223, 224]
-        prices_df['Price'] = prices_df['Price'] / 1000.0
+        prices_df = prices_df[prices_df['Price'] != 9999.0] # 9999 means unavailable [cite: 220]
+        prices_df['Price'] = prices_df['Price'] / 1000.0 # Convert tenths of a cent to dollars [cite: 223, 224]
         prices_df['FuelType'] = prices_df['FuelId'].map(fuel_mapping)
         prices_df = prices_df.dropna(subset=['FuelType']) 
         
