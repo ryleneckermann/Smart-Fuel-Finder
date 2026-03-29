@@ -38,7 +38,7 @@ if 'viewed_servo' not in st.session_state: st.session_state.viewed_servo = None
 # ==========================================================
 @st.cache_data(ttl=900) # Caches for 15 mins to prevent government bans
 def fetch_live_sa_prices(token):
-if token == 'cfba60f1-ddea-4fc0-8889-832a414aafc9':
+if token == 'YOUR_DATA_PUBLISHER_TOKEN_HERE':
 st.error("⚠️ Please paste your SA Government Token in the code!")
 return pd.DataFrame()
 
