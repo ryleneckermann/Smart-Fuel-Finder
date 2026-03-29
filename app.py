@@ -6,9 +6,9 @@ import requests
 from streamlit_geolocation import streamlit_geolocation
 from openrouteservice import client
 
-==========================================================
-API SETUP
-==========================================================
+# ==========================================================
+# API SETUP
+# ==========================================================
 ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0='
 ors_client = client.Client(key=ORS_API_KEY)
 
@@ -33,9 +33,9 @@ if 'selected_servos' not in st.session_state: st.session_state.selected_servos =
 if 'user_loc' not in st.session_state: st.session_state.user_loc = None
 if 'viewed_servo' not in st.session_state: st.session_state.viewed_servo = None
 
-==========================================================
-LIVE DATA LOGIC
-==========================================================
+# ==========================================================
+# LIVE DATA LOGIC
+# ==========================================================
 @st.cache_data(ttl=900) # Caches for 15 mins to prevent government bans
 def fetch_live_sa_prices(token):
 if token == 'cfba60f1-ddea-4fc0-8889-832a414aafc9':
@@ -123,9 +123,9 @@ results.append({
 return pd.DataFrame(results).sort_values("Total Trip Cost")
 except: return None
 
-==========================================================
-UI: HEADER & INSTRUCTIONS
-==========================================================
+# ==========================================================
+# UI: HEADER & INSTRUCTIONS
+# ==========================================================
 st.title("Smart Fuel Finder")
 
 with st.expander("📖 How to use Smart Fuel Finder", expanded=True):
@@ -136,9 +136,9 @@ st.markdown("""
 4. Calculate: Found a servo you like? Tap the "➕ Add to Calculator" button under the map. Add a second one to see them battle it out!
 """)
 
-==========================================================
-UI: SEARCH & FUEL SELECTOR
-==========================================================
+# ==========================================================
+# UI: SEARCH & FUEL SELECTOR
+# ==========================================================
 st.markdown("### 1. Where are you?")
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -168,9 +168,9 @@ if not stations_df.empty:
 stations_df['current_price'] = stations_df[f'price_{fuel_choice}']
 stations_df = stations_df[stations_df['current_price'] > 0.0]
 
-==========================================================
-THE LOCKED-IN MAP
-==========================================================
+# ==========================================================
+# THE LOCKED-IN MAP
+# ==========================================================
 st.markdown("### 3. Tap a pin to explore")
 
 if stations_df.empty:
@@ -221,9 +221,9 @@ if st_data and st_data.get('last_object_clicked'):
     match = stations_df[(stations_df['lat_r'] == clicked_lat) & (stations_df['lon_r'] == clicked_lon)]
     if not match.empty:
         st.session_state.viewed_servo = match.iloc[0]['name']
-==========================================================
-ACTION BAR (The "Click 2" logic)
-==========================================================
+# ==========================================================
+# ACTION BAR (The "Click 2" logic)
+# ==========================================================
 if st.session_state.viewed_servo:
 if st.session_state.viewed_servo not in st.session_state.selected_servos:
 if st.button(f"➕ Add {st.session_state.viewed_servo} to Calculator", use_container_width=True):
@@ -234,9 +234,9 @@ st.rerun()
 else:
 st.success(f"✅ {st.session_state.viewed_servo} is locked in below.")
 
-==========================================================
-CALCULATOR SECTION
-==========================================================
+# ==========================================================
+# CALCULATOR SECTION
+# ==========================================================
 st.divider()
 
 if st.session_state.user_loc and st.session_state.selected_servos:
