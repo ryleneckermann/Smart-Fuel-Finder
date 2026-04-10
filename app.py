@@ -125,35 +125,29 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
             trip_fuel_cost = (d_km * (eff / 100)) * row['current_price']
             total = (litres * row['current_price']) + trip_fuel_cost
             
-            # Format columns for the final table display
             results.append({
                 "Station": row['name'], 
-                "Total Trip Cost": total, # Keep as float for sorting
+                "Total Trip Cost": total, 
                 "Pump Price": f"${row['current_price']:.2f}",
                 "Drive Time": f"{round(t_min, 1)}m", 
                 "Dist (km)": f"{round(d_km, 2)}km", 
                 "Lat": row['lat'], 
                 "Lon": row['lon'],
-                "Cost Display": f"${round(total, 2)}" # String version for UI
+                "Cost Display": f"${round(total, 2)}" 
             })
         
-        # Sort by the float value of Total Trip Cost
         res_df = pd.DataFrame(results).sort_values("Total Trip Cost")
-        
-        # Drop the float column and rename the display column for clean UI presentation
         res_df = res_df.drop(columns=["Total Trip Cost"]).rename(columns={"Cost Display": "Total Trip Cost"})
         return res_df
     except Exception as e: 
         st.error(f"Routing API Error: Make sure API limits aren't exceeded. {e}")
         return None
 
-
 # ==========================================================
-# UI: MAIN BODY
+# UI: TOP BAR
 # ==========================================================
 st.title("Smart Fuel Finder")
 
-# 1. Quick Inputs
 col1, col2, col3 = st.columns([3, 1, 2])
 with col1:
     manual_address = st.text_input("Search Loc", placeholder="e.g. Marion SA", label_visibility="collapsed")
@@ -161,12 +155,6 @@ with col2:
     loc = streamlit_geolocation()
 with col3:
     fuel_choice = st.selectbox("Fuel Type", options=["U91", "U95", "U98", "Diesel"], label_visibility="collapsed")
-
-with st.expander("⚙️ Adjust Car & Trip Settings", expanded=False):
-    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
-    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
-    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
-    return_trip = st.toggle("Include Return Trip", value=True)
 
 # Handle Location Updates
 if manual_address:
@@ -183,55 +171,18 @@ elif loc and loc.get('latitude'):
     st.session_state.center = [loc['latitude'], loc['longitude']]
     st.success("📍 GPS Location locked!")
 
-# Clean Data for Fuel Choice
+# Clean Data & Calculate Base Distances
 if not stations_df.empty:
     stations_df['current_price'] = stations_df[f'price_{fuel_choice}']
     stations_df = stations_df[stations_df['current_price'] > 0.0]
-
-# ==========================================================
-# AUTO CALCULATOR BUTTON & TOP 5 TABLE
-# ==========================================================
-if st.session_state.user_loc:
-    if st.button("🚀 Find Best Overall Price (15km Radius)", use_container_width=True, type="primary"):
-        with st.spinner("Calculating actual driving costs for nearby stations..."):
-            u_lon, u_lat = st.session_state.user_loc
-            
-            # 1. Straight-line distance filter
-            stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
-            nearby = stations_df[stations_df['dist_km'] <= 15.0]
-            
-            if nearby.empty:
-                st.warning("No stations found within 15km.")
-            else:
-                # 2. Limit to top 30 cheapest to prevent ORS matrix limit crash
-                nearby = nearby.sort_values('current_price').head(30)
-                
-                # 3. Get exact driving costs
-                res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
-                
-                if res_df is not None and not res_df.empty:
-                    st.session_state.auto_winners = res_df.head(5) # Save top 5
-                    # Update map center to absolute winner
-                    st.session_state.center = [st.session_state.auto_winners.iloc[0]['Lat'], st.session_state.auto_winners.iloc[0]['Lon']]
-
-if st.session_state.auto_winners is not None:
-    winner = st.session_state.auto_winners.iloc[0]
-    st.success(f"🏆 **Ultimate Best Value:** {winner['Station']}")
     
-    st.markdown("#### Top 5 Best Value Stations")
-    # Display the dataframe cleanly without the Lat/Lon coordinates
-    display_df = st.session_state.auto_winners[['Station', 'Total Trip Cost', 'Pump Price', 'Drive Time', 'Dist (km)']]
-    st.dataframe(display_df, hide_index=True, use_container_width=True)
-    
-    if st.button("Clear Best Results"):
-        st.session_state.auto_winners = None
-        st.rerun()
+    if st.session_state.user_loc:
+        u_lon, u_lat = st.session_state.user_loc
+        stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
 
 # ==========================================================
-# THE MAP
+# UI: THE MAP (Front and Center)
 # ==========================================================
-st.markdown("### Tap a pin to explore or compare manually")
-
 if stations_df.empty:
     st.warning("Loading Live Data... (or no stations sell this fuel nearby).")
 else:
@@ -243,18 +194,22 @@ else:
             icon=folium.Icon(color='black', icon='info-sign'),
             popup="Start Location"
         ).add_to(m)
+        
+        # PERFORMANCE TWEAK: Only render markers within 25km if location is known
+        map_display_df = stations_df[stations_df['dist_km'] <= 25.0]
+    else:
+        map_display_df = stations_df
 
-    for _, row in stations_df.iterrows():
+    for _, row in map_display_df.iterrows():
         is_sel = row['name'] in st.session_state.selected_servos
         
-        # Check if this station is in the top 5
         is_in_top_5 = False
         if st.session_state.auto_winners is not None:
             is_in_top_5 = row['name'] in st.session_state.auto_winners['Station'].values
 
         color = "#28a745" if row['current_price'] < 1.90 else "#dc3545"
         if is_sel: color = "black"
-        if is_in_top_5: color = "blue" # Highlight auto-winners in blue
+        if is_in_top_5: color = "blue" 
         
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
@@ -291,8 +246,56 @@ else:
             st.session_state.viewed_servo = match.iloc[0]['name']
 
 # ==========================================================
-# MANUAL CALCULATOR LOGIC
+# UI: BELOW MAP (Settings & Calculators)
 # ==========================================================
+st.divider()
+
+with st.expander("⚙️ Adjust Car & Trip Settings", expanded=False):
+    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
+    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
+    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
+    return_trip = st.toggle("Include Return Trip", value=True)
+
+# ----------------------------------------------------------
+# AUTO CALCULATOR
+# ----------------------------------------------------------
+if st.session_state.user_loc:
+    if st.button("🚀 Find Best Overall Price (15km Radius)", use_container_width=True, type="primary"):
+        with st.spinner("Calculating actual driving costs for nearby stations..."):
+            u_lon, u_lat = st.session_state.user_loc
+            
+            nearby = stations_df[stations_df['dist_km'] <= 15.0]
+            
+            if nearby.empty:
+                st.warning("No stations found within 15km.")
+            else:
+                # LOGIC FIX: Sort by closest distance first, take top 48 to avoid ORS limit
+                # We use 48 because ORS allows 50 locations total (1 origin + 49 destinations)
+                nearby = nearby.sort_values('dist_km').head(48)
+                
+                res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
+                
+                if res_df is not None and not res_df.empty:
+                    st.session_state.auto_winners = res_df.head(5) 
+                    st.session_state.center = [st.session_state.auto_winners.iloc[0]['Lat'], st.session_state.auto_winners.iloc[0]['Lon']]
+
+if st.session_state.auto_winners is not None:
+    winner = st.session_state.auto_winners.iloc[0]
+    st.success(f"🏆 **Ultimate Best Value:** {winner['Station']}")
+    
+    st.markdown("#### Top 5 Best Value Stations")
+    display_df = st.session_state.auto_winners[['Station', 'Total Trip Cost', 'Pump Price', 'Drive Time', 'Dist (km)']]
+    st.dataframe(display_df, hide_index=True, use_container_width=True)
+    
+    if st.button("Clear Best Results"):
+        st.session_state.auto_winners = None
+        st.rerun()
+
+st.divider()
+
+# ----------------------------------------------------------
+# MANUAL CALCULATOR
+# ----------------------------------------------------------
 if st.session_state.viewed_servo:
     if st.session_state.viewed_servo not in st.session_state.selected_servos:
         if st.button(f"➕ Compare {st.session_state.viewed_servo}", use_container_width=True):
@@ -318,7 +321,6 @@ if st.session_state.user_loc and st.session_state.selected_servos:
             c3.metric("Distance", item['Dist (km)'])
         
         elif len(st.session_state.selected_servos) == 2:
-            # We need to strip the '$' and 'm' to do the math for the comparison banner
             w_cost = float(res_df.iloc[0]['Total Trip Cost'].replace('$', ''))
             l_cost = float(res_df.iloc[1]['Total Trip Cost'].replace('$', ''))
             w_time = float(res_df.iloc[0]['Drive Time'].replace('m', ''))
