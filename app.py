@@ -92,6 +92,7 @@ def fetch_live_sa_prices(token):
 
         prices_df = pd.DataFrame(prices_list)
         prices_df = prices_df[prices_df['Price'] != 9999.0]
+        # We divide by 1000 here, preserving max decimal precision in the dataframe
         prices_df['Price'] = prices_df['Price'] / 1000.0 
         prices_df['FuelType'] = prices_df['FuelId'].map(fuel_mapping)
         prices_df = prices_df.dropna(subset=['FuelType']) 
@@ -122,18 +123,20 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
         for i, (index, row) in enumerate(dataframe.iterrows()):
             d_km = (matrix['distances'][0][i] / 1000) * multiplier
             t_min = (matrix['durations'][0][i] / 60) * multiplier
+            
+            # Math utilizes the unrounded max precision 'current_price' float
             trip_fuel_cost = (d_km * (eff / 100)) * row['current_price']
             total = (litres * row['current_price']) + trip_fuel_cost
             
             results.append({
                 "Station": row['name'], 
                 "Total Trip Cost": total, 
-                "Pump Price": f"${row['current_price']:.2f}",
+                "Pump Price": f"${row['current_price']:.3f}", # 3 decimal places for pump
                 "Drive Time": f"{round(t_min, 1)}m", 
                 "Dist (km)": f"{round(d_km, 2)}km", 
                 "Lat": row['lat'], 
                 "Lon": row['lon'],
-                "Cost Display": f"${round(total, 2)}" 
+                "Cost Display": f"${total:.2f}" # 2 decimal places for total cost
             })
         
         res_df = pd.DataFrame(results).sort_values("Total Trip Cost")
@@ -195,7 +198,6 @@ else:
             popup="Start Location"
         ).add_to(m)
         
-        # PERFORMANCE TWEAK: Only render markers within 25km if location is known
         map_display_df = stations_df[stations_df['dist_km'] <= 25.0]
     else:
         map_display_df = stations_df
@@ -211,14 +213,15 @@ else:
         if is_sel: color = "black"
         if is_in_top_5: color = "blue" 
         
+        # Prices updated to display 3 decimal places
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
             <b style='font-size: 14px;'>{row['name']}</b><br>
             <hr style='margin: 4px 0;'>
-            U91: ${row['price_U91']:.2f}<br>
-            U95: ${row['price_U95']:.2f}<br>
-            U98: ${row['price_U98']:.2f}<br>
-            Diesel: ${row['price_Diesel']:.2f}
+            U91: ${row['price_U91']:.3f}<br>
+            U95: ${row['price_U95']:.3f}<br>
+            U98: ${row['price_U98']:.3f}<br>
+            Diesel: ${row['price_Diesel']:.3f}
         </div>
         """
         
@@ -226,7 +229,7 @@ else:
         folium.Marker(
             [row['lat'], row['lon']],
             icon=folium.DivIcon(html=f"""<div style="color:white; background:{color}; padding:5px; border-radius:4px; 
-                {border_style} width:50px; text-align:center; font-weight:bold;">${row['current_price']:.2f}</div>"""),
+                {border_style} width:55px; text-align:center; font-weight:bold; font-size: 13px;">${row['current_price']:.3f}</div>"""),
             popup=folium.Popup(popup_html, max_width=250)
         ).add_to(m)
 
@@ -246,7 +249,20 @@ else:
             st.session_state.viewed_servo = match.iloc[0]['name']
 
 # ==========================================================
-# UI: BELOW MAP (Settings & Calculators)
+# UI: DYNAMIC COMPARE BUTTON (Directly Under Map)
+# ==========================================================
+if st.session_state.viewed_servo:
+    if st.session_state.viewed_servo not in st.session_state.selected_servos:
+        if st.button(f"➕ Add {st.session_state.viewed_servo} to Compare", use_container_width=True):
+            st.session_state.selected_servos.append(st.session_state.viewed_servo)
+            if len(st.session_state.selected_servos) > 2:
+                st.session_state.selected_servos.pop(0)
+            st.rerun()
+    else:
+        st.info(f"✅ {st.session_state.viewed_servo} is locked in for comparison below.")
+
+# ==========================================================
+# UI: SETTINGS & CALCULATORS
 # ==========================================================
 st.divider()
 
@@ -269,10 +285,7 @@ if st.session_state.user_loc:
             if nearby.empty:
                 st.warning("No stations found within 15km.")
             else:
-                # LOGIC FIX: Sort by closest distance first, take top 48 to avoid ORS limit
-                # We use 48 because ORS allows 50 locations total (1 origin + 49 destinations)
                 nearby = nearby.sort_values('dist_km').head(48)
-                
                 res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
                 
                 if res_df is not None and not res_df.empty:
@@ -294,18 +307,8 @@ if st.session_state.auto_winners is not None:
 st.divider()
 
 # ----------------------------------------------------------
-# MANUAL CALCULATOR
+# MANUAL CALCULATOR COMPARISON RESULTS
 # ----------------------------------------------------------
-if st.session_state.viewed_servo:
-    if st.session_state.viewed_servo not in st.session_state.selected_servos:
-        if st.button(f"➕ Compare {st.session_state.viewed_servo}", use_container_width=True):
-            st.session_state.selected_servos.append(st.session_state.viewed_servo)
-            if len(st.session_state.selected_servos) > 2:
-                st.session_state.selected_servos.pop(0)
-            st.rerun()
-    else:
-        st.info(f"✅ {st.session_state.viewed_servo} is locked in for comparison.")
-
 if st.session_state.user_loc and st.session_state.selected_servos:
     st.markdown("### Manual Comparison")
     u_lon, u_lat = st.session_state.user_loc
@@ -329,9 +332,9 @@ if st.session_state.user_loc and st.session_state.selected_servos:
             savings = round(l_cost - w_cost, 2)
             time_diff = round(abs(w_time - l_time), 1)
             
-            st.success(f"🏆 {res_df.iloc[0]['Station']} beats {res_df.iloc[1]['Station']} by ${savings}.")
+            st.success(f"🏆 {res_df.iloc[0]['Station']} beats {res_df.iloc[1]['Station']} by ${savings:.2f}.")
             if w_time > l_time:
-                st.warning(f"Trade-off: Saving ${savings} costs an extra {time_diff} mins driving.")
+                st.warning(f"Trade-off: Saving ${savings:.2f} costs an extra {time_diff} mins driving.")
                 
             col_a, col_b = st.columns(2)
             for i, row in res_df.iterrows():
