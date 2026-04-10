@@ -10,13 +10,13 @@ import numpy as np
 # ==========================================================
 # API SETUP
 # ==========================================================
-ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' # Make sure to replace this securely
+ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' # Replace this securely
 ors_client = client.Client(key=ORS_API_KEY)
 
 # SA GOVT API SETUP
 SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
 
-st.set_page_config(page_title="Smart Fuel Finder", layout="centered", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
 
 VEHICLE_TYPES = {
     "Small Car (Hatch/Sedan)": 6.5,
@@ -41,8 +41,8 @@ if 'user_loc' not in st.session_state:
     st.session_state.user_loc = None
 if 'viewed_servo' not in st.session_state: 
     st.session_state.viewed_servo = None
-if 'auto_winner' not in st.session_state:
-    st.session_state.auto_winner = None
+if 'auto_winners' not in st.session_state:
+    st.session_state.auto_winners = None
 
 # ==========================================================
 # HELPER FUNCTIONS
@@ -124,26 +124,29 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
             t_min = (matrix['durations'][0][i] / 60) * multiplier
             trip_fuel_cost = (d_km * (eff / 100)) * row['current_price']
             total = (litres * row['current_price']) + trip_fuel_cost
+            
+            # Format columns for the final table display
             results.append({
-                "Station": row['name'], "Total Trip Cost": round(total, 2),
-                "Drive Time": round(t_min, 1), "Pump Price": f"${row['current_price']:.2f}",
-                "Dist (km)": round(d_km, 2), "Lat": row['lat'], "Lon": row['lon']
+                "Station": row['name'], 
+                "Total Trip Cost": total, # Keep as float for sorting
+                "Pump Price": f"${row['current_price']:.2f}",
+                "Drive Time": f"{round(t_min, 1)}m", 
+                "Dist (km)": f"{round(d_km, 2)}km", 
+                "Lat": row['lat'], 
+                "Lon": row['lon'],
+                "Cost Display": f"${round(total, 2)}" # String version for UI
             })
-        return pd.DataFrame(results).sort_values("Total Trip Cost")
+        
+        # Sort by the float value of Total Trip Cost
+        res_df = pd.DataFrame(results).sort_values("Total Trip Cost")
+        
+        # Drop the float column and rename the display column for clean UI presentation
+        res_df = res_df.drop(columns=["Total Trip Cost"]).rename(columns={"Cost Display": "Total Trip Cost"})
+        return res_df
     except Exception as e: 
         st.error(f"Routing API Error: Make sure API limits aren't exceeded. {e}")
         return None
 
-# ==========================================================
-# UI: SIDEBAR (Car Settings)
-# ==========================================================
-with st.sidebar:
-    st.header("⚙️ Car Settings")
-    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
-    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
-    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
-    return_trip = st.toggle("Include Return Trip", value=True)
-    st.info("Settings are saved automatically. Change these to adjust your trip costs.")
 
 # ==========================================================
 # UI: MAIN BODY
@@ -158,6 +161,12 @@ with col2:
     loc = streamlit_geolocation()
 with col3:
     fuel_choice = st.selectbox("Fuel Type", options=["U91", "U95", "U98", "Diesel"], label_visibility="collapsed")
+
+with st.expander("⚙️ Adjust Car & Trip Settings", expanded=False):
+    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
+    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
+    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
+    return_trip = st.toggle("Include Return Trip", value=True)
 
 # Handle Location Updates
 if manual_address:
@@ -180,7 +189,7 @@ if not stations_df.empty:
     stations_df = stations_df[stations_df['current_price'] > 0.0]
 
 # ==========================================================
-# AUTO CALCULATOR BUTTON
+# AUTO CALCULATOR BUTTON & TOP 5 TABLE
 # ==========================================================
 if st.session_state.user_loc:
     if st.button("🚀 Find Best Overall Price (15km Radius)", use_container_width=True, type="primary"):
@@ -201,20 +210,21 @@ if st.session_state.user_loc:
                 res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
                 
                 if res_df is not None and not res_df.empty:
-                    st.session_state.auto_winner = res_df.iloc[0]
-                    # Update map center to winner
-                    st.session_state.center = [st.session_state.auto_winner['Lat'], st.session_state.auto_winner['Lon']]
+                    st.session_state.auto_winners = res_df.head(5) # Save top 5
+                    # Update map center to absolute winner
+                    st.session_state.center = [st.session_state.auto_winners.iloc[0]['Lat'], st.session_state.auto_winners.iloc[0]['Lon']]
 
-if st.session_state.auto_winner is not None:
-    w = st.session_state.auto_winner
-    st.success(f"🏆 **Ultimate Best Value:** {w['Station']}")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Pump Price", w['Pump Price'])
-    c2.metric("Total Trip Cost", f"${w['Total Trip Cost']}")
-    c3.metric("Drive Time", f"{w['Drive Time']}m")
-    c4.metric("Distance", f"{w['Dist (km)']}km")
-    if st.button("Clear Best Result"):
-        st.session_state.auto_winner = None
+if st.session_state.auto_winners is not None:
+    winner = st.session_state.auto_winners.iloc[0]
+    st.success(f"🏆 **Ultimate Best Value:** {winner['Station']}")
+    
+    st.markdown("#### Top 5 Best Value Stations")
+    # Display the dataframe cleanly without the Lat/Lon coordinates
+    display_df = st.session_state.auto_winners[['Station', 'Total Trip Cost', 'Pump Price', 'Drive Time', 'Dist (km)']]
+    st.dataframe(display_df, hide_index=True, use_container_width=True)
+    
+    if st.button("Clear Best Results"):
+        st.session_state.auto_winners = None
         st.rerun()
 
 # ==========================================================
@@ -236,11 +246,15 @@ else:
 
     for _, row in stations_df.iterrows():
         is_sel = row['name'] in st.session_state.selected_servos
-        is_winner = st.session_state.auto_winner is not None and row['name'] == st.session_state.auto_winner['Station']
         
+        # Check if this station is in the top 5
+        is_in_top_5 = False
+        if st.session_state.auto_winners is not None:
+            is_in_top_5 = row['name'] in st.session_state.auto_winners['Station'].values
+
         color = "#28a745" if row['current_price'] < 1.90 else "#dc3545"
         if is_sel: color = "black"
-        if is_winner: color = "blue" # Highlight auto-winner in blue
+        if is_in_top_5: color = "blue" # Highlight auto-winners in blue
         
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
@@ -253,7 +267,7 @@ else:
         </div>
         """
         
-        border_style = "border: 2px solid gold;" if is_winner else "border:1px solid black;"
+        border_style = "border: 2px solid gold;" if is_in_top_5 else "border:1px solid black;"
         folium.Marker(
             [row['lat'], row['lon']],
             icon=folium.DivIcon(html=f"""<div style="color:white; background:{color}; padding:5px; border-radius:4px; 
@@ -299,25 +313,29 @@ if st.session_state.user_loc and st.session_state.selected_servos:
         if len(st.session_state.selected_servos) == 1:
             item = res_df.iloc[0]
             c1, c2, c3 = st.columns(3)
-            c1.metric("Total Cost", f"${item['Total Trip Cost']}")
-            c2.metric("Drive Time", f"{item['Drive Time']}m")
-            c3.metric("Distance", f"{item['Dist (km)']}km")
+            c1.metric("Total Cost", f"{item['Total Trip Cost']}")
+            c2.metric("Drive Time", item['Drive Time'])
+            c3.metric("Distance", item['Dist (km)'])
         
         elif len(st.session_state.selected_servos) == 2:
-            winner = res_df.iloc[0]
-            loser = res_df.iloc[1]
-            savings = round(loser['Total Trip Cost'] - winner['Total Trip Cost'], 2)
-            time_diff = round(abs(winner['Drive Time'] - loser['Drive Time']), 1)
+            # We need to strip the '$' and 'm' to do the math for the comparison banner
+            w_cost = float(res_df.iloc[0]['Total Trip Cost'].replace('$', ''))
+            l_cost = float(res_df.iloc[1]['Total Trip Cost'].replace('$', ''))
+            w_time = float(res_df.iloc[0]['Drive Time'].replace('m', ''))
+            l_time = float(res_df.iloc[1]['Drive Time'].replace('m', ''))
             
-            st.success(f"🏆 {winner['Station']} beats {loser['Station']} by ${savings}.")
-            if winner['Drive Time'] > loser['Drive Time']:
+            savings = round(l_cost - w_cost, 2)
+            time_diff = round(abs(w_time - l_time), 1)
+            
+            st.success(f"🏆 {res_df.iloc[0]['Station']} beats {res_df.iloc[1]['Station']} by ${savings}.")
+            if w_time > l_time:
                 st.warning(f"Trade-off: Saving ${savings} costs an extra {time_diff} mins driving.")
                 
             col_a, col_b = st.columns(2)
             for i, row in res_df.iterrows():
                 with [col_a, col_b][i]:
-                    st.metric(row['Station'], f"${row['Total Trip Cost']}")
-                    st.caption(f"Drive: {row['Drive Time']}m | Dist: {row['Dist (km)']}km")
+                    st.metric(row['Station'], row['Total Trip Cost'])
+                    st.caption(f"Drive: {row['Drive Time']} | Dist: {row['Dist (km)']}")
 
     if st.button("Clear Manual Comparisons", use_container_width=True):
         st.session_state.selected_servos = []
