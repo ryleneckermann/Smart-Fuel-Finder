@@ -5,17 +5,18 @@ import pandas as pd
 import requests
 from streamlit_geolocation import streamlit_geolocation
 from openrouteservice import client
+import numpy as np
 
 # ==========================================================
 # API SETUP
 # ==========================================================
-ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' 
+ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' # Make sure to replace this securely
 ors_client = client.Client(key=ORS_API_KEY)
 
 # SA GOVT API SETUP
 SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
 
-st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
+st.set_page_config(page_title="Smart Fuel Finder", layout="centered", initial_sidebar_state="expanded")
 
 VEHICLE_TYPES = {
     "Small Car (Hatch/Sedan)": 6.5,
@@ -27,6 +28,9 @@ VEHICLE_TYPES = {
     "Custom Number": 0.0
 }
 
+# ==========================================================
+# SESSION STATE
+# ==========================================================
 if 'center' not in st.session_state: 
     st.session_state.center = [-34.9285, 138.6007]
 if 'zoom' not in st.session_state: 
@@ -37,62 +41,58 @@ if 'user_loc' not in st.session_state:
     st.session_state.user_loc = None
 if 'viewed_servo' not in st.session_state: 
     st.session_state.viewed_servo = None
+if 'auto_winner' not in st.session_state:
+    st.session_state.auto_winner = None
 
 # ==========================================================
-# LIVE DATA LOGIC
+# HELPER FUNCTIONS
 # ==========================================================
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculates straight-line distance between two points on earth in km."""
+    R = 6371.0
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+    return R * c
+
 @st.cache_data(ttl=900)
 def fetch_live_sa_prices(token):
-    if token == 'YOUR_DATA_PUBLISHER_TOKEN_HERE':
-        st.error("⚠️ Please paste your SA Government Token in the code!")
-        return pd.DataFrame()
-        
     headers = {
         "Authorization": f"FPDAPI SubscriberToken={token}",
         "Content-Type": "application/json"
     }
-    
     try:
-        # 1. Fetch Fuel Types
         ft_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetCountryFuelTypes?countryId=21", headers=headers)
         ft_json = ft_res.json()
-        
-        # FIX: The API wraps the list in a "Fuels" key
         ft_list = ft_json.get('Fuels', []) if isinstance(ft_json, dict) else ft_json
         
         fuel_mapping = {}
         for item in ft_list:
             fid = item.get("FuelId")
-            name = item.get("Name", "").upper()
-            if fid == 2: fuel_mapping[fid] = "price_U91"   # 'Unleaded'
-            elif fid == 5: fuel_mapping[fid] = "price_U95" # 'Premium Unleaded 95'
-            elif fid == 8: fuel_mapping[fid] = "price_U98" # 'Premium Unleaded 98'
-            elif fid == 3: fuel_mapping[fid] = "price_Diesel" # 'Diesel'
+            if fid == 2: fuel_mapping[fid] = "price_U91"   
+            elif fid == 5: fuel_mapping[fid] = "price_U95" 
+            elif fid == 8: fuel_mapping[fid] = "price_U98" 
+            elif fid == 3: fuel_mapping[fid] = "price_Diesel" 
 
-        # 2. Fetch Sites
         sites_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetFullSiteDetails?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
         sites_json = sites_res.json()
-        # API wraps sites in "S" [cite: 100, 206]
         sites_list = sites_json.get('S', []) if isinstance(sites_json, dict) else sites_json
         
-        if not sites_list:
-            return pd.DataFrame()
+        if not sites_list: return pd.DataFrame()
 
         sites_df = pd.DataFrame(sites_list)
         sites_df = sites_df.rename(columns={"S": "SiteId", "N": "name", "Lat": "lat", "Lng": "lon"})
         
-        # 3. Fetch Prices
         prices_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Price/GetSitesPrices?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
-        prices_list = prices_res.json() # Usually a direct list [cite: 221]
-        
+        prices_list = prices_res.json()
         if not isinstance(prices_list, list):
             prices_list = prices_list.get('SitePrices', []) if isinstance(prices_list, dict) else []
 
         prices_df = pd.DataFrame(prices_list)
-        
-        # 4. Clean and Merge
-        prices_df = prices_df[prices_df['Price'] != 9999.0] # 9999 means unavailable [cite: 220]
-        prices_df['Price'] = prices_df['Price'] / 1000.0 # Convert tenths of a cent to dollars [cite: 223, 224]
+        prices_df = prices_df[prices_df['Price'] != 9999.0]
+        prices_df['Price'] = prices_df['Price'] / 1000.0 
         prices_df['FuelType'] = prices_df['FuelId'].map(fuel_mapping)
         prices_df = prices_df.dropna(subset=['FuelType']) 
         
@@ -103,9 +103,8 @@ def fetch_live_sa_prices(token):
             if f not in final_df.columns: final_df[f] = 0.00
         
         return final_df.fillna(0.00)
-        
     except Exception as e:
-        st.error(f"Critical App Error: {e}")
+        st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
 stations_df = fetch_live_sa_prices(SA_FUEL_TOKEN)
@@ -128,35 +127,39 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
             results.append({
                 "Station": row['name'], "Total Trip Cost": round(total, 2),
                 "Drive Time": round(t_min, 1), "Pump Price": f"${row['current_price']:.2f}",
-                "Dist (km)": round(d_km, 2)
+                "Dist (km)": round(d_km, 2), "Lat": row['lat'], "Lon": row['lon']
             })
         return pd.DataFrame(results).sort_values("Total Trip Cost")
-    except: 
+    except Exception as e: 
+        st.error(f"Routing API Error: Make sure API limits aren't exceeded. {e}")
         return None
 
 # ==========================================================
-# UI
+# UI: SIDEBAR (Car Settings)
+# ==========================================================
+with st.sidebar:
+    st.header("⚙️ Car Settings")
+    v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
+    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
+    litres = st.slider("Refuel Amount (L)", 10, 150, 50)
+    return_trip = st.toggle("Include Return Trip", value=True)
+    st.info("Settings are saved automatically. Change these to adjust your trip costs.")
+
+# ==========================================================
+# UI: MAIN BODY
 # ==========================================================
 st.title("Smart Fuel Finder")
 
-with st.expander("📖 How to use Smart Fuel Finder", expanded=True):
-    st.markdown("""
-    **1. Set Location:** Type your suburb in the search bar and press enter, OR click the **Target Icon** to use your phone's GPS.
-    **2. Pick Fuel:** Select what your car drinks.
-    **3. Explore Map:** Tap any colored pin to view current prices.
-    **4. Calculate:** Found a servo you like? Tap the **"➕ Add to Calculator"** button under the map. Add a second one to compare!
-    """)
-
-st.markdown("### 1. Where are you?")
-col1, col2 = st.columns([4, 1])
+# 1. Quick Inputs
+col1, col2, col3 = st.columns([3, 1, 2])
 with col1:
-    manual_address = st.text_input("Search Location", placeholder="e.g. Marion SA", label_visibility="collapsed")
+    manual_address = st.text_input("Search Loc", placeholder="e.g. Marion SA", label_visibility="collapsed")
 with col2:
     loc = streamlit_geolocation()
+with col3:
+    fuel_choice = st.selectbox("Fuel Type", options=["U91", "U95", "U98", "Diesel"], label_visibility="collapsed")
 
-st.markdown("### 2. What fuel do you need?")
-fuel_choice = st.selectbox("Select Fuel Type", options=["U91", "U95", "U98", "Diesel"], label_visibility="collapsed")
-
+# Handle Location Updates
 if manual_address:
     try:
         geocode_res = ors_client.pelias_search(text=f"{manual_address}, South Australia")
@@ -165,21 +168,62 @@ if manual_address:
             st.session_state.user_loc = [coords[0], coords[1]]
             st.session_state.center = [coords[1], coords[0]]
             st.success(f"📍 Location locked: {geocode_res['features'][0]['properties']['label']}")
-    except: 
-        pass
+    except: pass
 elif loc and loc.get('latitude'):
     st.session_state.user_loc = [loc['longitude'], loc['latitude']]
     st.session_state.center = [loc['latitude'], loc['longitude']]
     st.success("📍 GPS Location locked!")
 
+# Clean Data for Fuel Choice
 if not stations_df.empty:
     stations_df['current_price'] = stations_df[f'price_{fuel_choice}']
     stations_df = stations_df[stations_df['current_price'] > 0.0]
 
-st.markdown("### 3. Tap a pin to explore")
+# ==========================================================
+# AUTO CALCULATOR BUTTON
+# ==========================================================
+if st.session_state.user_loc:
+    if st.button("🚀 Find Best Overall Price (15km Radius)", use_container_width=True, type="primary"):
+        with st.spinner("Calculating actual driving costs for nearby stations..."):
+            u_lon, u_lat = st.session_state.user_loc
+            
+            # 1. Straight-line distance filter
+            stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
+            nearby = stations_df[stations_df['dist_km'] <= 15.0]
+            
+            if nearby.empty:
+                st.warning("No stations found within 15km.")
+            else:
+                # 2. Limit to top 30 cheapest to prevent ORS matrix limit crash
+                nearby = nearby.sort_values('current_price').head(30)
+                
+                # 3. Get exact driving costs
+                res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
+                
+                if res_df is not None and not res_df.empty:
+                    st.session_state.auto_winner = res_df.iloc[0]
+                    # Update map center to winner
+                    st.session_state.center = [st.session_state.auto_winner['Lat'], st.session_state.auto_winner['Lon']]
+
+if st.session_state.auto_winner is not None:
+    w = st.session_state.auto_winner
+    st.success(f"🏆 **Ultimate Best Value:** {w['Station']}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Pump Price", w['Pump Price'])
+    c2.metric("Total Trip Cost", f"${w['Total Trip Cost']}")
+    c3.metric("Drive Time", f"{w['Drive Time']}m")
+    c4.metric("Distance", f"{w['Dist (km)']}km")
+    if st.button("Clear Best Result"):
+        st.session_state.auto_winner = None
+        st.rerun()
+
+# ==========================================================
+# THE MAP
+# ==========================================================
+st.markdown("### Tap a pin to explore or compare manually")
 
 if stations_df.empty:
-    st.warning("Loading Live SA Government Data... (or no stations sell this fuel nearby).")
+    st.warning("Loading Live Data... (or no stations sell this fuel nearby).")
 else:
     m = folium.Map(location=st.session_state.center, zoom_start=st.session_state.zoom)
 
@@ -192,7 +236,11 @@ else:
 
     for _, row in stations_df.iterrows():
         is_sel = row['name'] in st.session_state.selected_servos
-        color = "black" if is_sel else ("#28a745" if row['current_price'] < 1.90 else "#dc3545")
+        is_winner = st.session_state.auto_winner is not None and row['name'] == st.session_state.auto_winner['Station']
+        
+        color = "#28a745" if row['current_price'] < 1.90 else "#dc3545"
+        if is_sel: color = "black"
+        if is_winner: color = "blue" # Highlight auto-winner in blue
         
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
@@ -205,14 +253,15 @@ else:
         </div>
         """
         
+        border_style = "border: 2px solid gold;" if is_winner else "border:1px solid black;"
         folium.Marker(
             [row['lat'], row['lon']],
             icon=folium.DivIcon(html=f"""<div style="color:white; background:{color}; padding:5px; border-radius:4px; 
-                border:1px solid black; width:50px; text-align:center; font-weight:bold;">${row['current_price']:.2f}</div>"""),
+                {border_style} width:50px; text-align:center; font-weight:bold;">${row['current_price']:.2f}</div>"""),
             popup=folium.Popup(popup_html, max_width=250)
         ).add_to(m)
 
-    st_data = st_folium(m, center=st.session_state.center, zoom=st.session_state.zoom, use_container_width=True, height=450, key="map")
+    st_data = st_folium(m, center=st.session_state.center, zoom=st.session_state.zoom, use_container_width=True, height=400, key="map")
 
     if st_data and st_data.get("center"):
         st.session_state.center = [st_data["center"]["lat"], st_data["center"]["lng"]]
@@ -227,26 +276,21 @@ else:
         if not match.empty:
             st.session_state.viewed_servo = match.iloc[0]['name']
 
+# ==========================================================
+# MANUAL CALCULATOR LOGIC
+# ==========================================================
 if st.session_state.viewed_servo:
     if st.session_state.viewed_servo not in st.session_state.selected_servos:
-        if st.button(f"➕ Add {st.session_state.viewed_servo} to Calculator", use_container_width=True):
+        if st.button(f"➕ Compare {st.session_state.viewed_servo}", use_container_width=True):
             st.session_state.selected_servos.append(st.session_state.viewed_servo)
             if len(st.session_state.selected_servos) > 2:
                 st.session_state.selected_servos.pop(0)
             st.rerun()
     else:
-        st.success(f"✅ {st.session_state.viewed_servo} is locked in below.")
-
-st.divider()
+        st.info(f"✅ {st.session_state.viewed_servo} is locked in for comparison.")
 
 if st.session_state.user_loc and st.session_state.selected_servos:
-    st.markdown("### 4. Calculator")
-    with st.expander("⚙️ Adjust Car Settings", expanded=False):
-        v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
-        eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
-        litres = st.slider("Refuel Amount (L)", 10, 150, 50)
-        return_trip = st.toggle("Include Return Trip", value=True)
-
+    st.markdown("### Manual Comparison")
     u_lon, u_lat = st.session_state.user_loc
     picked_df = stations_df[stations_df['name'].isin(st.session_state.selected_servos)]
     res_df = get_matrix_results(u_lon, u_lat, picked_df, eff, litres, return_trip)
@@ -254,12 +298,10 @@ if st.session_state.user_loc and st.session_state.selected_servos:
     if res_df is not None and not res_df.empty:
         if len(st.session_state.selected_servos) == 1:
             item = res_df.iloc[0]
-            st.subheader(f"📍 {item['Station']}")
             c1, c2, c3 = st.columns(3)
             c1.metric("Total Cost", f"${item['Total Trip Cost']}")
             c2.metric("Drive Time", f"{item['Drive Time']}m")
             c3.metric("Distance", f"{item['Dist (km)']}km")
-            st.info("Tap another servo on the map and click 'Add' to compare them.")
         
         elif len(st.session_state.selected_servos) == 2:
             winner = res_df.iloc[0]
@@ -267,9 +309,9 @@ if st.session_state.user_loc and st.session_state.selected_servos:
             savings = round(loser['Total Trip Cost'] - winner['Total Trip Cost'], 2)
             time_diff = round(abs(winner['Drive Time'] - loser['Drive Time']), 1)
             
-            st.success(f"🏆 {winner['Station']} is your best value.")
+            st.success(f"🏆 {winner['Station']} beats {loser['Station']} by ${savings}.")
             if winner['Drive Time'] > loser['Drive Time']:
-                st.warning(f"Trade-off: Saving ${savings} will cost you an extra {time_diff} mins of driving.")
+                st.warning(f"Trade-off: Saving ${savings} costs an extra {time_diff} mins driving.")
                 
             col_a, col_b = st.columns(2)
             for i, row in res_df.iterrows():
@@ -277,8 +319,7 @@ if st.session_state.user_loc and st.session_state.selected_servos:
                     st.metric(row['Station'], f"${row['Total Trip Cost']}")
                     st.caption(f"Drive: {row['Drive Time']}m | Dist: {row['Dist (km)']}km")
 
-if len(st.session_state.selected_servos) > 0:
-    if st.button("Clear Selections", use_container_width=True):
+    if st.button("Clear Manual Comparisons", use_container_width=True):
         st.session_state.selected_servos = []
         st.session_state.viewed_servo = None
         st.rerun()
