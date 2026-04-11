@@ -131,12 +131,12 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
             results.append({
                 "Station": row['name'], 
                 "Total Trip Cost": total, 
-                "Pump Price": f"${row['current_price']:.3f}", # 3 decimal places for pump
+                "Pump Price": f"${row['current_price']:.3f}", 
                 "Drive Time": f"{round(t_min, 1)}m", 
                 "Dist (km)": f"{round(d_km, 2)}km", 
                 "Lat": row['lat'], 
                 "Lon": row['lon'],
-                "Cost Display": f"${total:.2f}" # 2 decimal places for total cost
+                "Cost Display": f"${total:.2f}" 
             })
         
         res_df = pd.DataFrame(results).sort_values("Total Trip Cost")
@@ -213,7 +213,6 @@ else:
         if is_sel: color = "black"
         if is_in_top_5: color = "blue" 
         
-        # Prices updated to display 3 decimal places
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
             <b style='font-size: 14px;'>{row['name']}</b><br>
@@ -268,7 +267,11 @@ st.divider()
 
 with st.expander("⚙️ Adjust Car & Trip Settings", expanded=False):
     v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
-    eff = VEHICLE_TYPES[v_type] if v_type != "Custom Number" else st.number_input("L/100km", value=8.5)
+    
+    # ALWAYS display the number input. It defaults to the selected car's value, but allows manual edits.
+    default_eff = float(VEHICLE_TYPES[v_type]) if v_type != "Custom Number" else 8.5
+    eff = st.number_input("Fuel Economy (L/100km)", value=default_eff, step=0.1)
+    
     litres = st.slider("Refuel Amount (L)", 10, 150, 50)
     return_trip = st.toggle("Include Return Trip", value=True)
 
