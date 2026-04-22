@@ -352,5 +352,5 @@ if st.session_state.user_loc and st.session_state.selected_servos:
 
 st.divider()
 # Mandatory SA Government Attribution & Complaint Link
-st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2023) Copyright of the State of South Australia")
+st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026) Copyright of the State of South Australia")
 st.markdown("Noticed an incorrect price? [Raise a complaint directly with the State](https://www.cbs.sa.gov.au/contact).")
