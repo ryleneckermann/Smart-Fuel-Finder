@@ -211,7 +211,7 @@ if not stations_df.empty:
         stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
 
 # ==========================================================
-# [SECTION 7] UI - MAP DISPLAY
+# [SECTION 7] UI - MAP DISPLAY (ANTI-RELOAD FIX APPLIED)
 # ==========================================================
 if stations_df.empty:
     st.warning("Loading Live Data... (or no stations sell this fuel nearby).")
@@ -269,11 +269,8 @@ else:
             popup=folium.Popup(popup_html, max_width=250)
         ).add_to(m)
 
-    st_data = st_folium(m, center=st.session_state.center, zoom=st.session_state.zoom, use_container_width=True, height=400, key="map")
-
-    if st_data and st_data.get("center"):
-        st.session_state.center = [st_data["center"]["lat"], st_data["center"]["lng"]]
-        st.session_state.zoom = st_data["zoom"]
+    # FIX: returned_objects restricts what the map sends to Python, stopping the grey screen reloads.
+    st_data = st_folium(m, use_container_width=True, height=400, key="map", returned_objects=["last_object_clicked"])
 
     if st_data and st_data.get('last_object_clicked'):
         clicked_lat = round(st_data['last_object_clicked']['lat'], 4)
@@ -387,9 +384,7 @@ if st.session_state.user_loc and st.session_state.selected_servos:
 # ==========================================================
 st.divider()
 
-# Provide a feedback link for users
 st.link_button("💬 Leave Feedback", "https://docs.google.com/forms/d/YOUR_FORM_LINK")
 
-# Mandatory SA Government Attribution & Complaint Link
-st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026). Copyright of the State of South Australia.")
+st.caption("Contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026). Copyright of the State of South Australia.")
 st.markdown("Noticed an incorrect price? [Raise a complaint directly with the State](https://www.cbs.sa.gov.au/contact).")
