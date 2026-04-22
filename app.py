@@ -1,3 +1,6 @@
+# ==========================================================
+# [SECTION 1] IMPORTS & CONFIG
+# ==========================================================
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
@@ -7,16 +10,17 @@ from streamlit_geolocation import streamlit_geolocation
 from openrouteservice import client
 import numpy as np
 
+st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
+
 # ==========================================================
-# API SETUP
+# [SECTION 2] API KEYS & CONSTANTS
 # ==========================================================
-ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' # Replace this securely
+# Make sure to replace this securely before sharing broadly
+ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' 
 ors_client = client.Client(key=ORS_API_KEY)
 
 # SA GOVT API SETUP
 SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
-
-st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
 
 VEHICLE_TYPES = {
     "Small Car (Hatch/Sedan)": 6.5,
@@ -29,7 +33,7 @@ VEHICLE_TYPES = {
 }
 
 # ==========================================================
-# SESSION STATE
+# [SECTION 3] SESSION STATE INITIALIZATION
 # ==========================================================
 if 'center' not in st.session_state: 
     st.session_state.center = [-34.9285, 138.6007]
@@ -45,7 +49,7 @@ if 'auto_winners' not in st.session_state:
     st.session_state.auto_winners = None
 
 # ==========================================================
-# HELPER FUNCTIONS
+# [SECTION 4] CORE HELPER FUNCTIONS
 # ==========================================================
 def haversine_distance(lat1, lon1, lat2, lon2):
     """Calculates straight-line distance between two points on earth in km."""
@@ -59,11 +63,13 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=900)
 def fetch_live_sa_prices(token):
+    """Fetches and cleans live SA Government fuel data."""
     headers = {
         "Authorization": f"FPDAPI SubscriberToken={token}",
         "Content-Type": "application/json"
     }
     try:
+        # Get fuel types
         ft_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetCountryFuelTypes?countryId=21", headers=headers)
         ft_json = ft_res.json()
         ft_list = ft_json.get('Fuels', []) if isinstance(ft_json, dict) else ft_json
@@ -76,6 +82,7 @@ def fetch_live_sa_prices(token):
             elif fid == 8: fuel_mapping[fid] = "price_U98" 
             elif fid == 3: fuel_mapping[fid] = "price_Diesel" 
 
+        # Get sites
         sites_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetFullSiteDetails?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
         sites_json = sites_res.json()
         sites_list = sites_json.get('S', []) if isinstance(sites_json, dict) else sites_json
@@ -85,6 +92,7 @@ def fetch_live_sa_prices(token):
         sites_df = pd.DataFrame(sites_list)
         sites_df = sites_df.rename(columns={"S": "SiteId", "N": "name", "Lat": "lat", "Lng": "lon"})
         
+        # Get prices
         prices_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Price/GetSitesPrices?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
         prices_list = prices_res.json()
         if not isinstance(prices_list, list):
@@ -92,11 +100,11 @@ def fetch_live_sa_prices(token):
 
         prices_df = pd.DataFrame(prices_list)
         prices_df = prices_df[prices_df['Price'] != 9999.0]
-        # We divide by 1000 here, preserving max decimal precision in the dataframe
         prices_df['Price'] = prices_df['Price'] / 1000.0 
         prices_df['FuelType'] = prices_df['FuelId'].map(fuel_mapping)
         prices_df = prices_df.dropna(subset=['FuelType']) 
         
+        # Merge sites and prices
         pivot_prices = prices_df.pivot(index='SiteId', columns='FuelType', values='Price').reset_index()
         final_df = pd.merge(sites_df, pivot_prices, on='SiteId', how='inner')
         
@@ -108,9 +116,8 @@ def fetch_live_sa_prices(token):
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-stations_df = fetch_live_sa_prices(SA_FUEL_TOKEN)
-
 def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
+    """Hits the ORS API to calculate actual driving routes and costs."""
     all_coords = [[u_lon, u_lat]] + dataframe[['lon', 'lat']].values.tolist()
     try:
         matrix = ors_client.distance_matrix(
@@ -124,7 +131,6 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
             d_km = (matrix['distances'][0][i] / 1000) * multiplier
             t_min = (matrix['durations'][0][i] / 60) * multiplier
             
-            # Math utilizes the unrounded max precision 'current_price' float
             trip_fuel_cost = (d_km * (eff / 100)) * row['current_price']
             total = (litres * row['current_price']) + trip_fuel_cost
             
@@ -147,16 +153,32 @@ def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
         return None
 
 # ==========================================================
-# UI: TOP BAR
+# [SECTION 5] DATA FETCHING & PREPARATION
 # ==========================================================
-st.title("Smart Fuel Finder")
+stations_df = fetch_live_sa_prices(SA_FUEL_TOKEN)
 
-col1, col2, col3 = st.columns([3, 1, 2])
-with col1:
+# ==========================================================
+# [SECTION 6] UI - HEADER & INPUTS
+# ==========================================================
+title_col, help_col = st.columns([5, 1])
+with title_col:
+    st.title("Smart Fuel Finder")
+with help_col:
+    with st.popover("❓ Help"):
+        st.markdown("""
+        **How to use:**
+        1. **Set Location:** Type your suburb or click the GPS icon.
+        2. **Pick Fuel:** Choose your fuel type.
+        3. **Adjust Settings:** Scroll down to set your car's fuel economy and how many litres you need.
+        4. **Calculate:** Click 'Find Best Overall Price' to let the app do the math, or tap pins on the map to compare specific stations manually.
+        """)
+
+input_col1, input_col2, input_col3 = st.columns([3, 1, 2])
+with input_col1:
     manual_address = st.text_input("Search Loc", placeholder="e.g. Marion SA", label_visibility="collapsed")
-with col2:
+with input_col2:
     loc = streamlit_geolocation()
-with col3:
+with input_col3:
     fuel_choice = st.selectbox("Fuel Type", options=["U91", "U95", "U98", "Diesel"], label_visibility="collapsed")
 
 # Handle Location Updates
@@ -179,12 +201,17 @@ if not stations_df.empty:
     stations_df['current_price'] = stations_df[f'price_{fuel_choice}']
     stations_df = stations_df[stations_df['current_price'] > 0.0]
     
+    if not stations_df.empty:
+        # Calculate the 15th and 85th percentiles for the price coloring
+        price_q15 = stations_df['current_price'].quantile(0.15)
+        price_q85 = stations_df['current_price'].quantile(0.85)
+
     if st.session_state.user_loc:
         u_lon, u_lat = st.session_state.user_loc
         stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
 
 # ==========================================================
-# UI: THE MAP (Front and Center)
+# [SECTION 7] UI - MAP DISPLAY
 # ==========================================================
 if stations_df.empty:
     st.warning("Loading Live Data... (or no stations sell this fuel nearby).")
@@ -209,10 +236,20 @@ else:
         if st.session_state.auto_winners is not None:
             is_in_top_5 = row['name'] in st.session_state.auto_winners['Station'].values
 
-        color = "#28a745" if row['current_price'] < 1.90 else "#dc3545"
+        # Apply 15/70/15 logic for colors
+        if row['current_price'] <= price_q15:
+            color = "#28a745" # Green (Cheapest 15%)
+        elif row['current_price'] >= price_q85:
+            color = "#dc3545" # Red (Most expensive 15%)
+        else:
+            color = "#ffc107" # Yellow (Middle 70%)
+
+        # Override colors if selected or winner
         if is_sel: color = "black"
         if is_in_top_5: color = "blue" 
         
+        text_color = "black" if color == "#ffc107" else "white"
+
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
             <b style='font-size: 14px;'>{row['name']}</b><br>
@@ -224,10 +261,10 @@ else:
         </div>
         """
         
-        border_style = "border: 2px solid gold;" if is_in_top_5 else "border:1px solid black;"
+        border_style = "border: 2px solid blue;" if is_in_top_5 else "border:1px solid black;"
         folium.Marker(
             [row['lat'], row['lon']],
-            icon=folium.DivIcon(html=f"""<div style="color:white; background:{color}; padding:5px; border-radius:4px; 
+            icon=folium.DivIcon(html=f"""<div style="color:{text_color}; background:{color}; padding:5px; border-radius:4px; 
                 {border_style} width:55px; text-align:center; font-weight:bold; font-size: 13px;">${row['current_price']:.3f}</div>"""),
             popup=folium.Popup(popup_html, max_width=250)
         ).add_to(m)
@@ -248,7 +285,7 @@ else:
             st.session_state.viewed_servo = match.iloc[0]['name']
 
 # ==========================================================
-# UI: DYNAMIC COMPARE BUTTON (Directly Under Map)
+# [SECTION 8] UI - ADD TO COMPARE (Below Map)
 # ==========================================================
 if st.session_state.viewed_servo:
     if st.session_state.viewed_servo not in st.session_state.selected_servos:
@@ -260,24 +297,21 @@ if st.session_state.viewed_servo:
     else:
         st.info(f"✅ {st.session_state.viewed_servo} is locked in for comparison below.")
 
-# ==========================================================
-# UI: SETTINGS & CALCULATORS
-# ==========================================================
 st.divider()
 
+# ==========================================================
+# [SECTION 9] UI - CALCULATORS AND SETTINGS
+# ==========================================================
 with st.expander("⚙️ Adjust Car & Trip Settings", expanded=False):
     v_type = st.selectbox("Vehicle Type", options=list(VEHICLE_TYPES.keys()))
     
-    # ALWAYS display the number input. It defaults to the selected car's value, but allows manual edits.
     default_eff = float(VEHICLE_TYPES[v_type]) if v_type != "Custom Number" else 8.5
     eff = st.number_input("Fuel Economy (L/100km)", value=default_eff, step=0.1)
     
     litres = st.slider("Refuel Amount (L)", 10, 150, 50)
     return_trip = st.toggle("Include Return Trip", value=True)
 
-# ----------------------------------------------------------
-# AUTO CALCULATOR
-# ----------------------------------------------------------
+# --- AUTO CALCULATOR ---
 if st.session_state.user_loc:
     if st.button("🚀 Find Best Overall Price (15km Radius)", use_container_width=True, type="primary"):
         with st.spinner("Calculating actual driving costs for nearby stations..."):
@@ -309,9 +343,7 @@ if st.session_state.auto_winners is not None:
 
 st.divider()
 
-# ----------------------------------------------------------
-# MANUAL CALCULATOR COMPARISON RESULTS
-# ----------------------------------------------------------
+# --- MANUAL COMPARISON CALCULATOR ---
 if st.session_state.user_loc and st.session_state.selected_servos:
     st.markdown("### Manual Comparison")
     u_lon, u_lat = st.session_state.user_loc
@@ -350,7 +382,14 @@ if st.session_state.user_loc and st.session_state.selected_servos:
         st.session_state.viewed_servo = None
         st.rerun()
 
+# ==========================================================
+# [SECTION 10] FEEDBACK & FOOTER
+# ==========================================================
 st.divider()
+
+# Provide a feedback link for users
+st.link_button("💬 Leave Feedback", "https://docs.google.com/forms/d/YOUR_FORM_LINK")
+
 # Mandatory SA Government Attribution & Complaint Link
-st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026) Copyright of the State of South Australia")
+st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026). Copyright of the State of South Australia.")
 st.markdown("Noticed an incorrect price? [Raise a complaint directly with the State](https://www.cbs.sa.gov.au/contact).")
