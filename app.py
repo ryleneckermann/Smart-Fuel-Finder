@@ -15,7 +15,6 @@ st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
 # ==========================================================
 # [SECTION 2] API KEYS & CONSTANTS
 # ==========================================================
-# Make sure to replace this securely before sharing broadly
 ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' 
 ors_client = client.Client(key=ORS_API_KEY)
 
@@ -63,13 +62,11 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=900)
 def fetch_live_sa_prices(token):
-    """Fetches and cleans live SA Government fuel data."""
     headers = {
         "Authorization": f"FPDAPI SubscriberToken={token}",
         "Content-Type": "application/json"
     }
     try:
-        # Get fuel types
         ft_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetCountryFuelTypes?countryId=21", headers=headers)
         ft_json = ft_res.json()
         ft_list = ft_json.get('Fuels', []) if isinstance(ft_json, dict) else ft_json
@@ -82,7 +79,6 @@ def fetch_live_sa_prices(token):
             elif fid == 8: fuel_mapping[fid] = "price_U98" 
             elif fid == 3: fuel_mapping[fid] = "price_Diesel" 
 
-        # Get sites
         sites_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Subscriber/GetFullSiteDetails?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
         sites_json = sites_res.json()
         sites_list = sites_json.get('S', []) if isinstance(sites_json, dict) else sites_json
@@ -92,7 +88,6 @@ def fetch_live_sa_prices(token):
         sites_df = pd.DataFrame(sites_list)
         sites_df = sites_df.rename(columns={"S": "SiteId", "N": "name", "Lat": "lat", "Lng": "lon"})
         
-        # Get prices
         prices_res = requests.get("https://fppdirectapi-prod.safuelpricinginformation.com.au/Price/GetSitesPrices?countryId=21&geoRegionLevel=3&geoRegionId=4", headers=headers)
         prices_list = prices_res.json()
         if not isinstance(prices_list, list):
@@ -104,7 +99,6 @@ def fetch_live_sa_prices(token):
         prices_df['FuelType'] = prices_df['FuelId'].map(fuel_mapping)
         prices_df = prices_df.dropna(subset=['FuelType']) 
         
-        # Merge sites and prices
         pivot_prices = prices_df.pivot(index='SiteId', columns='FuelType', values='Price').reset_index()
         final_df = pd.merge(sites_df, pivot_prices, on='SiteId', how='inner')
         
@@ -117,7 +111,6 @@ def fetch_live_sa_prices(token):
         return pd.DataFrame()
 
 def get_matrix_results(u_lon, u_lat, dataframe, eff, litres, return_trip):
-    """Hits the ORS API to calculate actual driving routes and costs."""
     all_coords = [[u_lon, u_lat]] + dataframe[['lon', 'lat']].values.tolist()
     try:
         matrix = ors_client.distance_matrix(
@@ -202,8 +195,10 @@ if not stations_df.empty:
     stations_df = stations_df[stations_df['current_price'] > 0.0]
     
     if not stations_df.empty:
-        # Calculate the 15th and 85th percentiles for the price coloring
+        # Calculate 5-tier percentiles
         price_q15 = stations_df['current_price'].quantile(0.15)
+        price_q30 = stations_df['current_price'].quantile(0.30)
+        price_q70 = stations_df['current_price'].quantile(0.70)
         price_q85 = stations_df['current_price'].quantile(0.85)
 
     if st.session_state.user_loc:
@@ -211,7 +206,7 @@ if not stations_df.empty:
         stations_df['dist_km'] = haversine_distance(u_lat, u_lon, stations_df['lat'], stations_df['lon'])
 
 # ==========================================================
-# [SECTION 7] UI - MAP DISPLAY (ANTI-RELOAD FIX APPLIED)
+# [SECTION 7] UI - MAP DISPLAY 
 # ==========================================================
 if stations_df.empty:
     st.warning("Loading Live Data... (or no stations sell this fuel nearby).")
@@ -232,23 +227,34 @@ else:
     for _, row in map_display_df.iterrows():
         is_sel = row['name'] in st.session_state.selected_servos
         
+        # Check Top 5 Rank
         is_in_top_5 = False
+        rank_text = ""
+        rank_num = 0
         if st.session_state.auto_winners is not None:
-            is_in_top_5 = row['name'] in st.session_state.auto_winners['Station'].values
+            if row['name'] in st.session_state.auto_winners['Station'].values:
+                is_in_top_5 = True
+                rank_num = st.session_state.auto_winners.index[st.session_state.auto_winners['Station'] == row['name']].tolist()[0] + 1
+                rank_text = f"#{rank_num} | "
 
-        # Apply 15/70/15 logic for colors
+        # Apply 5-Tier Color Logic
         if row['current_price'] <= price_q15:
-            color = "#28a745" # Green (Cheapest 15%)
-        elif row['current_price'] >= price_q85:
-            color = "#dc3545" # Red (Most expensive 15%)
+            color = "#1e7e34" # Darkish Green
+        elif row['current_price'] <= price_q30:
+            color = "#28a745" # Lighter Green
+        elif row['current_price'] <= price_q70:
+            color = "#ffc107" # Yellow
+        elif row['current_price'] <= price_q85:
+            color = "#dc3545" # Red
         else:
-            color = "#ffc107" # Yellow (Middle 70%)
+            color = "#8b0000" # Darker Red
 
-        # Override colors if selected or winner
         if is_sel: color = "black"
         if is_in_top_5: color = "blue" 
         
         text_color = "black" if color == "#ffc107" else "white"
+        box_width = "75px" if is_in_top_5 else "55px"
+        border_style = "border: 2px solid gold;" if rank_num == 1 else ("border: 2px solid white;" if is_in_top_5 else "border:1px solid black;")
 
         popup_html = f"""
         <div style='min-width: 120px; font-family: sans-serif;'>
@@ -261,15 +267,13 @@ else:
         </div>
         """
         
-        border_style = "border: 2px solid blue;" if is_in_top_5 else "border:1px solid black;"
         folium.Marker(
             [row['lat'], row['lon']],
             icon=folium.DivIcon(html=f"""<div style="color:{text_color}; background:{color}; padding:5px; border-radius:4px; 
-                {border_style} width:55px; text-align:center; font-weight:bold; font-size: 13px;">${row['current_price']:.3f}</div>"""),
+                {border_style} width:{box_width}; text-align:center; font-weight:bold; font-size: 13px;">{rank_text}${row['current_price']:.3f}</div>"""),
             popup=folium.Popup(popup_html, max_width=250)
         ).add_to(m)
 
-    # FIX: returned_objects restricts what the map sends to Python, stopping the grey screen reloads.
     st_data = st_folium(m, use_container_width=True, height=400, key="map", returned_objects=["last_object_clicked"])
 
     if st_data and st_data.get('last_object_clicked'):
@@ -323,7 +327,8 @@ if st.session_state.user_loc:
                 res_df = get_matrix_results(u_lon, u_lat, nearby, eff, litres, return_trip)
                 
                 if res_df is not None and not res_df.empty:
-                    st.session_state.auto_winners = res_df.head(5) 
+                    # Save Top 5 and reset index so rank is perfectly 0 to 4
+                    st.session_state.auto_winners = res_df.head(5).reset_index(drop=True) 
                     st.session_state.center = [st.session_state.auto_winners.iloc[0]['Lat'], st.session_state.auto_winners.iloc[0]['Lon']]
 
 if st.session_state.auto_winners is not None:
@@ -386,5 +391,5 @@ st.divider()
 
 st.link_button("💬 Leave Feedback", "https://docs.google.com/forms/d/YOUR_FORM_LINK")
 
-st.caption("Contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026). Copyright of the State of South Australia.")
+st.caption("Based on or contains data provided by the State of South Australia (Office of Consumer and Business Services 2021-2026). Copyright of the State of South Australia.")
 st.markdown("Noticed an incorrect price? [Raise a complaint directly with the State](https://www.cbs.sa.gov.au/contact).")
