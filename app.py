@@ -15,11 +15,8 @@ st.set_page_config(page_title="Smart Fuel Finder", layout="centered")
 # ==========================================================
 # [SECTION 2] API KEYS & CONSTANTS
 # ==========================================================
-ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjAyM2M5MjE3ODIxNzRkY2FiMDNkZWI0OGZiN2M3Y2ZlIiwiaCI6Im11cm11cjY0In0=' 
-ors_client = client.Client(key=ORS_API_KEY)
-
-# SA GOVT API SETUP
-SA_FUEL_TOKEN = 'cfba60f1-ddea-4fc0-8889-832a414aafc9'
+ORS_API_KEY = st.secrets["ORS_API_KEY"]
+SA_FUEL_TOKEN = st.secrets["SA_FUEL_TOKEN"]
 
 VEHICLE_TYPES = {
     "Small Car (Hatch/Sedan)": 6.5,
