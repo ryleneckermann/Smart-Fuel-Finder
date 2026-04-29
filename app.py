@@ -328,6 +328,9 @@ if st.session_state.user_loc:
                     # Save Top 5 and reset index so rank is perfectly 0 to 4
                     st.session_state.auto_winners = res_df.head(5).reset_index(drop=True) 
                     st.session_state.center = [st.session_state.auto_winners.iloc[0]['Lat'], st.session_state.auto_winners.iloc[0]['Lon']]
+                    
+                    # Force the app to immediately reload and update the map with the Top 5
+                    st.rerun() 
 
 if st.session_state.auto_winners is not None:
     winner = st.session_state.auto_winners.iloc[0]
